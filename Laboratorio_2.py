@@ -1,18 +1,17 @@
+from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QDialog, QVBoxLayout, QTextEdit, QFileDialog, \
+    QLineEdit, QLabel, QMessageBox, QInputDialog, QWidget, QHBoxLayout
 import sys
 import json
-import heapq
-import collections
 import csv
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QDialog, QVBoxLayout, QTextEdit, QFileDialog, \
-    QLineEdit, QLabel, QMessageBox, QInputDialog, QWidget, QHBoxLayout, QComboBox
+import os
+from PyQt5.QtWidgets import QTextBrowser
 
 class Persona:
-    def __init__(self, nombre, dpi, date_birth, address, empresa):
+    def __init__(self, nombre, dpi, date_birth, address):
         self.nombre = nombre
         self.dpi = dpi
         self.date_birth = date_birth
         self.address = address
-        self.empresa = empresa
 
 class Nodo:
     def __init__(self, esHoja=False):
@@ -251,39 +250,48 @@ class ArbolB:
         else:
             return self._actualizar_en_arbol(nodo.hijos[indice], dpi, persona_nueva)
 
-    def calcular_frecuencia(dpi):
-        frecuencia = collections.Counter(dpi)
-        return frecuencia
 
-    def construir_arbol_huffman(frecuencia):
-        heap = [[frecuencia[caracter], [caracter, ""]] for caracter in frecuencia]
-        heapq.heapify(heap)
-        while len(heap) > 1:
-            lo = heapq.heappop(heap)
-            hi = heapq.heappop(heap)
-            for pair in lo[1:]:
-                pair[1] = '0' + pair[1]
-            for pair in hi[1:]:
-                pair[1] = '1' + pair[1]
-            heapq.heappush(heap, [lo[0] + hi[0]] + lo[1:] + hi[1:])
-        return sorted(heapq.heappop(heap)[1:], key=lambda p: (len(p[-1]), p))
-
-    def codificar_dpi(dpi, arbol_huffman):
-        codificacion = ""
-        for caracter in dpi:
-            for pair in arbol_huffman:
-                if caracter == pair[0]:
-                    codificacion += pair[1]
-        return codificacion
-
-    def decodificar_dpi(codificacion, arbol_huffman):
-        dpi_decodificado = ""
-        while codificacion:
-            for pair in arbol_huffman:
-                if codificacion.startswith(pair[1]):
-                    dpi_decodificado += pair[0]
-                    codificacion = codificacion[len(pair[1]):]
-        return dpi_decodificado
+class LZW:
+    def __init__(self):
+        self.init = {}
+    
+    def CFD(self, mensaje):
+        for i in range(len(mensaje)):
+            current = mensaje[i]
+            if current not in self.init:
+                self.init[current] = len(self.init)
+    
+    def COMPRESS(self, mensaje):
+        self.CFD(mensaje)
+        w = None
+        k = ""
+        wk = ""
+        salida = ""
+        for i in range(len(mensaje)):
+            k = mensaje[i]
+            if w is None:
+                wk = k
+            else:
+                wk = w + k
+            if wk in self.init:
+                w = wk
+            else:
+                salida += str(self.init[w]) + ","
+                self.init[wk] = len(self.init)
+                w = k
+        salida += str(self.init[w]) + ","
+        return salida
+    
+    def DECOMPRESS(self, compress):
+        original = ""
+        partes = compress.split(',')[:-1]
+        for parte in partes:
+            parte = int(parte)
+            for key, value in self.init.items():
+                if value == parte:
+                    original += key
+                    break
+        return original
 
 
 class VentanaPrincipal(QMainWindow):
@@ -312,89 +320,135 @@ class VentanaPrincipal(QMainWindow):
         self.boton_eliminar.setGeometry(120, 210, 140, 40)
         self.boton_eliminar.clicked.connect(self.eliminar)
 
-        self.combo_empresa = QComboBox(self)
-        self.combo_empresa.setGeometry(100, 260, 180, 40)
-        self.combo_empresa.addItem("Empresa A")
-        self.combo_empresa.addItem("Empresa B")
+        self.boton_comprimir = QPushButton("Comprimir DPI", self)
+        self.boton_comprimir.setGeometry(120, 260, 140, 40)
+        self.boton_comprimir.clicked.connect(self.comprimir_dpi)
 
-        self.arboles_por_empresa = {
-            "Empresa A": ArbolB(2),
-            "Empresa B": ArbolB(2)
-        }
+        self.boton_descomprimir = QPushButton("Descomprimir DPI", self)
+        self.boton_descomprimir.setGeometry(120, 310, 140, 40)
+        self.boton_descomprimir.clicked.connect(self.descomprimir_dpi)
+
+        self.boton_mostrar_datos = QPushButton("Mostrar Datos", self)
+        self.boton_mostrar_datos.setGeometry(120, 360, 140, 40)
+        self.boton_mostrar_datos.clicked.connect(self.mostrar_datos)
+
+        self.arbol = ArbolB(2)
+        self.lzw = LZW()
 
     def cargar(self):
         archivo, _ = QFileDialog.getOpenFileName(self, "Seleccionar archivo CSV", "", "CSV Files (*.csv)")
         if archivo:
             try:
-                with open(archivo, 'r', newline='') as file:
-                    csv_reader = csv.DictReader(file, delimiter=';')
-                    empresa_seleccionada = self.combo_empresa.currentText()
-                    
-                    for row in csv_reader:
-                        nombre = row['nombre']
-                        dpi = row['dpi']
-                        date_birth = row['date_birth']
-                        address = row['address']
-                        
-                        persona = Persona(nombre, dpi, date_birth, address, empresa_seleccionada)
-                        self.arboles_por_empresa[empresa_seleccionada].insertar(persona)
-                
-                QMessageBox.information(self, "Éxito", "Datos cargados exitosamente.")
+                archivo_absoluto = os.path.abspath(archivo)
+                with open(archivo_absoluto, 'r') as file:
+                    for line in file:
+                        parts = line.strip().split(';')
+                        if len(parts) == 2:
+                            accion = parts[0]
+                            datos_json = parts[1]
+
+                            if accion == 'INSERT':
+                                try:
+                                    datos = json.loads(datos_json)
+                                    persona = Persona(
+                                        datos['name'],
+                                        datos['dpi'],
+                                        datos['datebirth'],
+                                        datos['address']
+                                    )
+                                    self.arbol.insertar(persona)
+                                except json.JSONDecodeError as e:
+                                    QMessageBox.warning(self, "Advertencia", f"No se pudo cargar la línea debido a un error de JSON: {str(e)}")
+                            elif accion == 'DELETE':
+                                dpi_a_eliminar = datos_json
+                                self.arbol.eliminar(dpi_a_eliminar)
+                            elif accion == 'PATCH':
+                                try:
+                                    datos = json.loads(datos_json)
+                                    dpi_a_actualizar = datos['dpi']
+                                    if self.arbol.buscar(dpi_a_actualizar, self.arbol.raiz):
+                                        self.arbol.actualizar(dpi_a_actualizar, datos)
+                                except json.JSONDecodeError as e:
+                                    QMessageBox.warning(self, "Advertencia", f"No se pudo cargar la línea debido a un error de JSON: {str(e)}")
+                    QMessageBox.information(self, "Éxito", "Datos cargados exitosamente.")
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error al cargar el archivo CSV: {str(e)}")
+                QMessageBox.critical(self, "Error", f"Error al cargar el archivo: {str(e)}")
+
+
 
     def buscar(self):
         dpi_a_buscar = self.input_buscar.text()
-        empresa_seleccionada = self.combo_empresa.currentText()
-
         if dpi_a_buscar:
-            arbol_empresa = self.arboles_por_empresa[empresa_seleccionada]
-            persona = arbol_empresa.buscar(dpi_a_buscar, arbol_empresa.raiz)
-
+            persona = self.arbol.buscar(dpi_a_buscar, self.arbol.raiz)
             if persona:
-                QMessageBox.information(self, "Resultado de búsqueda", f"Persona encontrada en {empresa_seleccionada}:\n"
+                QMessageBox.information(self, "Resultado de búsqueda", f"Persona encontrada:\n"
                                                                         f"DPI: {persona.dpi}\n"
                                                                         f"Nombre: {persona.nombre}\n"
                                                                         f"Fecha de Nacimiento: {persona.date_birth}\n"
                                                                         f"Dirección: {persona.address}")
             else:
-                QMessageBox.warning(self, "Resultado de búsqueda", "No se encontró ninguna persona con el DPI especificado en la empresa seleccionada.")
+                QMessageBox.warning(self, "Resultado de búsqueda", "No se encontró ninguna persona con el DPI especificado.")
         else:
             QMessageBox.warning(self, "Error", "Ingrese un DPI válido para buscar.")
 
     def actualizar(self):
         dpi_a_actualizar, ok = QInputDialog.getText(self, "Actualizar Persona", "Ingrese el DPI de la persona a actualizar:")
-        empresa_seleccionada = self.combo_empresa.currentText()
-
         if ok:
-            arbol_empresa = self.arboles_por_empresa[empresa_seleccionada]
-            persona = arbol_empresa.buscar(dpi_a_actualizar, arbol_empresa.raiz)
-
+            persona = self.arbol.buscar(dpi_a_actualizar, self.arbol.raiz)
             if persona:
                 dialogo_actualizar = ActualizarPersonaDialog(persona)
                 if dialogo_actualizar.exec_() == QDialog.Accepted:
                     nuevos_datos = dialogo_actualizar.obtener_datos_actualizados()
                     if nuevos_datos:
-                        if arbol_empresa.actualizar(dpi_a_actualizar, nuevos_datos):
-                            QMessageBox.information(self, "Éxito", f"Persona actualizada exitosamente en {empresa_seleccionada}.")
+                        if self.arbol.actualizar(dpi_a_actualizar, nuevos_datos):
+                            QMessageBox.information(self, "Éxito", "Persona actualizada exitosamente.")
                         else:
                             QMessageBox.warning(self, "Error", "No se pudo actualizar la persona.")
                 else:
                     QMessageBox.warning(self, "Error", "La operación de actualización fue cancelada.")
             else:
-                QMessageBox.warning(self, "Error", "No se encontró ninguna persona con el DPI especificado en la empresa seleccionada.")
+                QMessageBox.warning(self, "Error", "No se encontró ninguna persona con el DPI especificado.")
 
     def eliminar(self):
         dpi_a_eliminar, ok = QInputDialog.getText(self, "Eliminar Persona", "Ingrese el DPI de la persona a eliminar:")
-        empresa_seleccionada = self.combo_empresa.currentText()
-
         if ok:
-            arbol_empresa = self.arboles_por_empresa[empresa_seleccionada]
-
-            if arbol_empresa.eliminar(dpi_a_eliminar):
-                QMessageBox.information(self, "Éxito", f"Persona eliminada exitosamente en {empresa_seleccionada}.")
+            if self.arbol.eliminar(dpi_a_eliminar):
+                QMessageBox.information(self, "Éxito", "Persona eliminada exitosamente.")
             else:
-                QMessageBox.warning(self, "Error", "No se encontró ninguna persona con el DPI especificado en la empresa seleccionada.")
+                QMessageBox.warning(self, "Error", "No se encontró ninguna persona con el DPI especificado.")
+
+    def comprimir_dpi(self):
+        dpi_a_comprimir, ok = QInputDialog.getText(self, "Comprimir DPI", "Ingrese el DPI a comprimir:")
+        if ok:
+            dpi_codificado = self.lzw.COMPRESS(dpi_a_comprimir)
+            QMessageBox.information(self, "Comprimir DPI", f"DPI comprimido: {dpi_codificado}")
+
+    def descomprimir_dpi(self):
+        dpi_codificado, ok = QInputDialog.getText(self, "Descomprimir DPI", "Ingrese el DPI comprimido:")
+        if ok:
+            dpi_decodificado = self.lzw.DECOMPRESS(dpi_codificado)
+            QMessageBox.information(self, "Descomprimir DPI", f"DPI descomprimido: {dpi_decodificado}")
+
+    def mostrar_datos(self):
+        datos = self.arbol.mostrar()
+        if datos:
+            dialogo_mostrar = MostrarDatosDialog("\n".join(datos))
+            dialogo_mostrar.exec_()
+
+class MostrarDatosDialog(QDialog):
+    def __init__(self, datos):
+        super().__init__()
+
+        self.setWindowTitle("Mostrar Datos")
+        self.setGeometry(100, 100, 400, 400)
+
+        layout = QVBoxLayout()
+
+        self.texto_datos = QTextBrowser(self)
+        self.texto_datos.setPlainText(datos)
+        layout.addWidget(self.texto_datos)
+
+        self.setLayout(layout)
 
 class ActualizarPersonaDialog(QDialog):
     def __init__(self, persona):
